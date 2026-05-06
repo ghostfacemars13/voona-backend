@@ -1,11 +1,5 @@
-/**
- * Source 1 : Open Food Facts
- *   - Base produits gratuite, légale, ~3M références
- *   - https://world.openfoodfacts.org/api/v2
- *   - Pas de clé API requise, fair-use (max ~100 req/min)
- */
-
 const BASE = "https://world.openfoodfacts.org";
+const SEARCH_BASE = "https://search.openfoodfacts.org";
 
 export async function fetchOpenFoodFactsProduct(barcode) {
   const url = `${BASE}/api/v2/product/${barcode}.json?fields=product_name,product_name_fr,brands,image_front_url,image_url,quantity,categories_tags,nutriscore_grade`;
@@ -27,20 +21,33 @@ export async function fetchOpenFoodFactsProduct(barcode) {
 
 export async function searchOFF(query) {
   if (!query || query.length < 2) return [];
-  const url = `${BASE}/cgi/search.pl?search_terms=${encodeURIComponent(
-    query
-  )}&search_simple=1&action=process&json=1&page_size=20&fields=code,product_name,product_name_fr,brands,image_front_small_url,quantity,countries_tags`;
-  const res = await fetch(url, { headers: { "User-Agent": "Voona/1.0" } });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return (data.products || [])
-    .filter((p) => (p.countries_tags || []).some((c) => c.includes("france")))
-    .map((p) => ({
-      barcode: p.code,
-      name: p.product_name_fr || p.product_name || "Sans nom",
-      brand: p.brands || "",
-      quantity: p.quantity || "",
-      imageUrl: p.image_front_small_url || null,
-    }))
-    .slice(0, 15);
+  const url = `${SEARCH_BASE}/search?q=${encodeURIComponent(query)}&page_size=20`;
+  try {
+    const res = await fetch(url, { headers: { "User-Agent": "Voona/1.0" } });
+    if (!res.ok) return [];
+    const txt = await res.text();
+    let data;
+    try { data = JSON.parse(txt); }
+    catch (e) { data = JSON.parse(txt.replace(/(?<!\\)""+/g, '"')); }
+    return (data.hits || [])
+      .map(p => {
+        let name = "";
+        if (typeof p.product_name === "string") name = p.product_name;
+        else if (p.product_name?.fr) name = p.product_name.fr;
+        else if (p.product_name?.en) name = p.product_name.en;
+        else if (p.product_name?.main) name = p.product_name.main;
+        const brand = Array.isArray(p.brands) ? p.brands.join(", ") : (p.brands || "");
+        const code = p.code;
+        const imageUrl = code && code.length >= 10
+          ? `https://images.openfoodfacts.org/images/products/${code.replace(/(.{3})(.{3})(.{3})(.+)/, "$1/$2/$3/$4")}/front_fr.200.jpg`
+          : null;
+        return { barcode: code, name: name || "Sans nom", brand, quantity: p.quantity || "", imageUrl };
+      })
+      .filter(p => p.barcode && p.name && p.name !== "Sans nom")
+      .slice(0, 15);
+  } catch (e) {
+    console.warn("searchOFF failed:", e.message);
+    return [];
+  }
 }
+
